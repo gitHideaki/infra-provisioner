@@ -1,0 +1,7 @@
+services:
+  provisioner:
+    build: .
+    volumes:
+      - ./data:/data
+    env_file: .env
+    restart: unless-stopped
