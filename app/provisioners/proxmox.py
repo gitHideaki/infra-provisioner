@@ -10,14 +10,18 @@ Proxmox プロビジョニング・デプロビジョニングのロジックモ
   1. ユーザーアカウント作成
   2. Resource Pool 作成
   3. SDN VNet 作成
-  4. Pool へのロール割り当て（ACL）
-  5. SDN 設定の反映（apply）
+  4. Subnet 作成（gateway + DHCP range 付き）
+  5. Pool への ACL 設定（PVEVMUser）
+  6. VNet への ACL 設定（PVESDNUser）
+  7. SDN 設定の反映（apply）
 
 デプロビジョニング内容（プロビジョニングの逆順）:
-  1. ACL 削除
-  2. Pool 削除
-  3. SDN VNet 削除 + apply
-  4. ユーザーアカウント削除
+  1. Pool ACL 削除
+  2. VNet ACL 削除
+  3. Pool 削除
+  4. Subnet 削除
+  5. VNet 削除 + apply
+  6. ユーザーアカウント削除
 
 命名規則:
   - Pool ID: "pool-{email_local}"  （例: pool-taro）
@@ -80,6 +84,27 @@ def _make_proxmox_userid(email: str) -> str:
     return f"{local}@{settings.proxmox_user_realm}"
 
 
+def _build_subnet(user_id: int, base: str) -> tuple[str, str, str, str]:
+    """
+    DB の User.id と PROXMOX_SUBNET_BASE から、そのユーザー専用のサブネット情報を生成する。
+
+    採番ルール: id=N → {base}.N.0/24
+    例: user_id=3, base="10.0" → cidr="10.0.3.0/24", gateway="10.0.3.1",
+                                  dhcp_start="10.0.3.100", dhcp_end="10.0.3.200"
+
+    User.id は DB の auto-increment のため再利用されず、削除済みユーザーのサブネットが
+    新ユーザーに割り当てられることはない（空き番号は生じるが問題ない）。
+
+    Returns:
+        (cidr, gateway, dhcp_start, dhcp_end) のタプル
+    """
+    cidr = f"{base}.{user_id}.0/24"
+    gateway = f"{base}.{user_id}.1"
+    dhcp_start = f"{base}.{user_id}.100"
+    dhcp_end = f"{base}.{user_id}.200"
+    return cidr, gateway, dhcp_start, dhcp_end
+
+
 def provision_user(db_user: User, db) -> bool:
     """
     Proxmox に対してユーザーをプロビジョニングする。
@@ -127,12 +152,23 @@ def provision_user(db_user: User, db) -> bool:
         )
         logger.debug("Proxmox: VNet 作成完了 vnet=%s", vnet_id)
 
-        # ── Step 4: Subnet 作成 ────────────────────────────────────────────
-        # VXLAN Zone では各 VNet が独立した L2 ドメインになるため、
-        # 複数ユーザーが同一の CIDR を持っても通信は相互に分離される。
-        subnet = settings.proxmox_subnet
-        proxmox_client.create_subnet(vnet=vnet_id, subnet=subnet)
-        logger.debug("Proxmox: Subnet 作成完了 vnet=%s subnet=%s", vnet_id, subnet)
+        # ── Step 4: Subnet 作成（DHCP・ゲートウェイ付き）─────────────────
+        # DB の user_id を使ってユーザー専用の /24 を決定論的に採番する。
+        # gateway を設定すると EVPN/Simple ゾーンが Anycast GW として機能し、
+        # dhcp-range を設定すると dnsmasq が DHCP サーバーとして動作する。
+        cidr, gw, dhcp_start, dhcp_end = _build_subnet(
+            db_user.id, settings.proxmox_subnet_base
+        )
+        proxmox_client.create_subnet(
+            vnet=vnet_id,
+            subnet=cidr,
+            gateway=gw,
+            dhcp_start=dhcp_start,
+            dhcp_end=dhcp_end,
+        )
+        logger.debug(
+            "Proxmox: Subnet 作成完了 vnet=%s subnet=%s gateway=%s", vnet_id, cidr, gw
+        )
 
         # ── Step 5: ACL 設定（Pool への PVEVMUser ロール付与）─────────────
         # "/pool/{pool_id}" パスに対してユーザーに PVEVMUser ロールを付与する。
@@ -168,16 +204,17 @@ def provision_user(db_user: User, db) -> bool:
         db_user.proxmox_user_id = userid
         db_user.proxmox_pool_id = pool_id
         db_user.proxmox_vnet_id = vnet_id
-        db_user.proxmox_subnet = subnet
+        db_user.proxmox_subnet = cidr
         db.commit()
 
         logger.info(
-            "Proxmox プロビジョニング完了: %s (user=%s pool=%s vnet=%s subnet=%s)",
+            "Proxmox プロビジョニング完了: %s (user=%s pool=%s vnet=%s subnet=%s gw=%s)",
             db_user.email,
             userid,
             pool_id,
             vnet_id,
-            subnet,
+            cidr,
+            gw,
         )
         return True
 

@@ -67,9 +67,10 @@ class Settings:
     # SDN VNet に付与するロール（VNet への ACL）
     proxmox_sdn_role: str
 
-    # VNet に設定するサブネット CIDR（全ユーザー共通）
-    # VXLAN では VNet ごとに L2 が分離されるため、複数ユーザーで同一 CIDR を使用可能
-    proxmox_subnet: str
+    # ユーザーごとのサブネット割り当てに使うベース（第 1・2 オクテット）
+    # User DB id=N に対して {base}.N.0/24 を自動生成する
+    # 例: "10.0" → id=1 が 10.0.1.0/24、id=2 が 10.0.2.0/24
+    proxmox_subnet_base: str
 
     # ── アプリ設定 ────────────────────────────────────────────────────────
     # SQLite データベースファイルのパス（Docker では /data/app.db）
@@ -123,7 +124,7 @@ def _load_settings() -> Settings:
         proxmox_user_realm=os.environ.get("PROXMOX_USER_REALM", "pve"),
         proxmox_user_role=os.environ.get("PROXMOX_USER_ROLE", "PVEVMUser"),
         proxmox_sdn_role=os.environ.get("PROXMOX_SDN_ROLE", "PVESDNUser"),
-        proxmox_subnet=os.environ.get("PROXMOX_SUBNET", "10.0.0.0/24"),
+        proxmox_subnet_base=os.environ.get("PROXMOX_SUBNET_BASE", "10.0"),
         # App
         db_path=os.environ.get("DB_PATH", "/data/app.db"),
         sync_interval_seconds=int(os.environ.get("SYNC_INTERVAL_SECONDS", "300")),

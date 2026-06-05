@@ -205,23 +205,35 @@ class ProxmoxClient:
         logger.info("Proxmox: VNet を削除 vnet=%s", vnet)
         self._delete(f"/api2/json/sdn/vnets/{vnet}")
 
-    def create_subnet(self, vnet: str, subnet: str) -> None:
+    def create_subnet(
+        self,
+        vnet: str,
+        subnet: str,
+        gateway: str | None = None,
+        dhcp_start: str | None = None,
+        dhcp_end: str | None = None,
+    ) -> None:
         """
         VNet にサブネットを作成する。
 
-        Proxmox SDN のサブネット機能により、VNet 内の IP レンジを定義する。
-        VXLAN Zone では複数の VNet が同一の CIDR を持っても、
-        VNet ごとに L2 が分離されているため通信は相互に干渉しない。
+        gateway を指定すると Proxmox がそのアドレスを Anycast Gateway として設定する。
+        dhcp_start / dhcp_end を両方指定すると dnsmasq による DHCP が有効になる。
+        （dnsmasq パッケージが Proxmox ホストにインストールされている必要がある）
 
         Args:
             vnet: 対象 VNet の ID（例: vnettaro）
-            subnet: CIDR 形式のサブネット（例: 10.0.0.0/24）
+            subnet: CIDR 形式のサブネット（例: 10.0.1.0/24）
+            gateway: ゲートウェイ IP（例: 10.0.1.1）
+            dhcp_start: DHCP 割り当て開始 IP（例: 10.0.1.100）
+            dhcp_end: DHCP 割り当て終了 IP（例: 10.0.1.200）
         """
-        logger.info("Proxmox: Subnet を作成 vnet=%s subnet=%s", vnet, subnet)
-        self._post(
-            f"/api2/json/sdn/vnets/{vnet}/subnets",
-            {"subnet": subnet, "type": "subnet"},
-        )
+        logger.info("Proxmox: Subnet を作成 vnet=%s subnet=%s gateway=%s", vnet, subnet, gateway)
+        body: dict = {"subnet": subnet, "type": "subnet"}
+        if gateway:
+            body["gateway"] = gateway
+        if dhcp_start and dhcp_end:
+            body["dhcp-range"] = f"start-address={dhcp_start},end-address={dhcp_end}"
+        self._post(f"/api2/json/sdn/vnets/{vnet}/subnets", body)
 
     def delete_subnet(self, vnet: str, subnet: str) -> None:
         """
